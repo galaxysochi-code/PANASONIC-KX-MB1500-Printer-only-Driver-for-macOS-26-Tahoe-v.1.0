@@ -1,0 +1,100 @@
+/* Английская локализация интерфейса.
+   Ключами служат исходные русские строки — язык разработки проекта. */
+
+/* Разделы */
+"Печать" = "Printing";
+"Устройство" = "Device";
+
+/* Общее */
+"Обновить" = "Refresh";
+"Обновить список устройств" = "Refresh device list";
+"Обновить список очередей" = "Refresh printer list";
+"Закрыть" = "Close";
+"Отмена" = "Cancel";
+"Отменить" = "Cancel";
+"Удалить" = "Delete";
+"Убрать" = "Remove";
+"Параметры" = "Settings";
+"Действия" = "Actions";
+"Формат" = "Format";
+"Качество" = "Quality";
+"по умолчанию" = "default";
+"Подождите…" = "Please wait…";
+"Завершить" = "Quit";
+"Открыть окно…" = "Open window…";
+
+/* Сканирование */
+"Проверьте раздел «Устройство» — там видно, что именно система обнаружила по USB." = "Check the Device section — it shows exactly what the system detected over USB.";
+
+/* Печать */
+"Принтер" = "Printer";
+"Драйвер Panasonic" = "Panasonic driver";
+"Очередей печати нет" = "No printers configured";
+"Добавьте принтер в «Системных настройках → Принтеры и сканеры» " = "Add a printer in System Settings → Printers & Scanners ";
+"или посмотрите раздел «Устройство»." = "or check the Device section.";
+"Копий: %lld" = "Copies: %lld";
+"Стороны" = "Sides";
+"Страницы" = "Pages";
+"напр. 1-3,5" = "e.g. 1-3,5";
+"Вписать в страницу" = "Fit to page";
+"Альбомная ориентация" = "Landscape";
+"Очередь заданий" = "Print queue";
+"Активных заданий нет" = "No active jobs";
+"Добавить файлы" = "Add files";
+"Перетащите сюда PDF или изображения" = "Drop PDFs or images here";
+"Системный диалог…" = "System dialog…";
+"Будет автоматически преобразован в PDF перед печатью" = "Will be converted to PDF automatically before printing";
+"Этот формат нельзя напечатать. Сохраните файл в PDF." = "This format cannot be printed. Save the file as PDF.";
+"В системе нет ни одной очереди печати" = "No print queues on this system";
+"Задание отправлено в очередь." = "Job submitted to the queue.";
+
+/* Служба преобразования */
+"Запустить" = "Start";
+"Запустить службу" = "Start service";
+"Остановить службу" = "Stop service";
+"Перезапустить" = "Restart";
+"Перезапустить службу" = "Restart service";
+"Состояние неизвестно" = "State unknown";
+"Запускается…" = "Starting…";
+"Служба печати работает" = "Print service is running";
+"Служба печати остановлена" = "Print service is stopped";
+"Поднимаю виртуальную машину и контейнер…" = "Starting the virtual machine and container…";
+"Останавливаю службу…" = "Stopping the service…";
+
+/* Устройство */
+"Состояние оборудования" = "Hardware status";
+"Скопировать отчёт" = "Copy report";
+"МФУ Panasonic подключено по USB" = "Panasonic MFP connected over USB";
+"МФУ Panasonic не обнаружено" = "No Panasonic MFP detected";
+"Включите аппарат и подключите его кабелем USB к этому компьютеру, затем нажмите «Обновить»." = "Turn the device on, connect it to this Mac with a USB cable, then press Refresh.";
+"USB-устройства" = "USB devices";
+"Устройств не найдено" = "No devices found";
+"Что видит подсистема печати (CUPS)" = "What the printing subsystem (CUPS) sees";
+"CUPS не обнаружила подключённых устройств" = "CUPS found no connected devices";
+"Очереди печати" = "Print queues";
+"Очередей нет" = "No queues";
+"Система не видит ни одного сканера" = "The system sees no scanners";
+"Штатные драйверы Panasonic" = "Stock Panasonic drivers";
+"Отчёт скопирован в буфер обмена." = "Report copied to the clipboard.";
+
+/* Источники сканирования */
+
+/* Цветность */
+
+/* Форматы сохранения */
+
+/* Параметры печати */
+"Односторонняя" = "Single-sided";
+"Двусторонняя, по длинной стороне" = "Double-sided, long edge";
+"Двусторонняя, по короткой стороне" = "Double-sided, short edge";
+"Черновик" = "Draft";
+"Обычное" = "Normal";
+"Высокое" = "High";
+
+/* Диагностика: восстановленные разделы */
+"Сканеры" = "Scanners";
+"Драйверы" = "Drivers";
+"Фильтр печати Panasonic (macOS)" = "Panasonic print filter (macOS)";
+"ICA-модуль сканера Panasonic" = "Panasonic ICA scanner module";
+"Бэкенд печати этого проекта" = "This project’s print backend";
+"colima (виртуальная машина Linux)" = "colima (Linux virtual machine)";
