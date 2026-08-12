@@ -1,217 +1,280 @@
-# Panasonic KX-MB1500 on macOS
+# Panasonic KX-MB1500 on macOS 15+
 
-**A working print driver for a discontinued multifunction printer on macOS 15 and newer, including Apple Silicon.**
+Printing **and scanning** for the Panasonic KX-MB1500 multifunction printer on
+modern macOS, including Apple Silicon. The device is discontinued: the last
+official Panasonic driver targets OS X 10.10 and does not work on macOS 11 or
+later.
 
-![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-000000?logo=apple&logoColor=white)
-![Architecture](https://img.shields.io/badge/arch-Apple%20Silicon%20%7C%20Intel-blue)
-![Scope](https://img.shields.io/badge/scope-printing%20only-orange)
-![License](https://img.shields.io/badge/license-MIT-green)
+This project gives you a **real system printer**. After installation
+“Panasonic KX-MB1500” shows up in the normal print dialog of any
+application — Word, Preview, Safari, anything.
 
-After installation the device appears as an ordinary system printer in every application.
-Printing only — scanning is out of scope, and [section 8](#8-scanning) explains why.
+Scanning works too, through a USB tunnel — but only inside the bundled
+“Panasonic MFP” app, not in Image Capture. See [Scanning](#scanning).
 
----
+> **Scope.** Verified on macOS 26.5 (Apple Silicon) against real hardware:
+> printing from Word, and multi-page scanning collected into a single PDF.
 
-## Contents
-
-- [1. Overview](#1-overview)
-- [2. How it works](#2-how-it-works)
-- [3. Requirements](#3-requirements)
-- [4. Installation](#4-installation)
-- [5. Using the printer](#5-using-the-printer)
-- [6. The application](#6-the-application)
-- [7. Managing the service by hand](#7-managing-the-service-by-hand)
-- [8. Scanning](#8-scanning)
-- [9. Troubleshooting](#9-troubleshooting)
-- [10. What gets installed where](#10-what-gets-installed-where)
-- [11. Security notes](#11-security-notes)
-- [12. Licensing](#12-licensing)
+[Русская версия](README.ru.md)
 
 ---
 
-## 1. Overview
+## Why the vendor drivers fail
 
-The Panasonic KX-MB1500 is discontinued. The last official driver from Panasonic targets OS X 10.10, and on macOS 11 and later it cannot run at all.
+Verified on macOS 26.5; the app ships the same diagnostics under **Device**:
 
-This project restores printing by a different route: it runs Panasonic's own Linux driver inside a small container and delivers the resulting data to the device through Apple's standard USB backend.
+| Component | State |
+|---|---|
+| Panasonic print filter (macOS) | Built for `i386`/`ppc` only. 32-bit code stopped running in macOS 10.15, and Rosetta translates `x86_64` only |
+| Panasonic ICA scanner module | `x86_64`, starts under Rosetta, then fails to load: it references `_kICANotification*` from Carbon, an API Apple removed |
+| The device itself | Its IEEE-1284 `device-id` has no `CMD` field — no PostScript, no PCL. It only speaks Panasonic’s host-based format, so generic drivers cannot help either |
 
-The result is a **real system print queue**. You print from Word, Preview, Safari or anything else exactly as you would with a supported printer — no separate application needs to be running.
-
-> **Scope:** printing only. Verified on macOS 26.5 Tahoe with Apple Silicon; the minimum supported system is macOS 15.
-
-### Why the vendor drivers fail
-
-These findings come from the diagnostics built into the application, under the **Device** tab:
-
-| Component | State on macOS 15+ |
-| --- | --- |
-| Panasonic print filter | Built for `i386` and `ppc` only. 32-bit code stopped running in macOS 10.15, and Rosetta translates `x86_64` only. |
-| Panasonic ICA scanner module | `x86_64`, starts under Rosetta, then fails to load: it references Carbon symbols Apple removed. |
-| The printer itself | Its IEEE-1284 identity string carries no `CMD` field — no PostScript, no PCL. Generic drivers cannot help. |
-
-Panasonic *did* ship a driver for Linux `x86_64`, and that one is fully functional. Everything here is built on top of it.
+Panasonic did, however, ship a driver for **Linux x86_64**, and that one is
+perfectly functional. Everything here is built on top of it.
 
 ---
 
-## 2. How it works
+## How it works
 
-A print job travels through five stages:
-
-```text
+```
 Word / Preview
-      |
-macOS print queue          (PPD from this project)
-      |  PDF, unmodified
-CUPS backend               /usr/libexec/cups/backend/panasonic
-      |  HTTP to 127.0.0.1:9631
-Linux container            Panasonic mccgdi filter -> PJL/GDI stream
-      |
-Standard CUPS USB backend -> the printer
+      ↓
+macOS print queue   (PPD from this repository)
+      ↓  PDF, unmodified
+CUPS backend  /usr/libexec/cups/backend/panasonic
+      ↓  HTTP to 127.0.0.1:9631
+Linux container  →  Panasonic’s own filter (mccgdi)  →  PJL/GDI stream
+      ↓
+Standard CUPS USB backend  →  the printer
 ```
 
-The container never touches USB and never sees your files. Its only job is turning a PDF into the byte stream this printer understands. Delivery to the hardware is done by Apple's own `usb` backend, which already knows how to wait for a sleeping device.
+The container has no access to USB and no access to your files. It only turns a
+PDF into the byte stream the printer understands. Delivery to the device is done
+by Apple’s own `usb` backend.
 
-### Why a backend rather than a print filter
+Scanning runs the same trick in reverse — the Linux driver stays in a container,
+and USB is brought to it over a socket:
 
-Three earlier designs failed, and the reasons are worth recording before anyone tries to "simplify" this:
+```
+Panasonic MFP app
+      ↓
+scanimage (container)  →  Panasonic’s own libsane backend
+      ↓  libusb-0.1 calls, intercepted by a shim
+TCP 9632  →  usbbridge (macOS)  →  IOKit  →  the scanner
+```
 
-- **A filter reaching the service over the network.** macOS runs print filters in a sandbox that permits exactly one outbound connection — the `cupsd` socket.
-- **A filter exchanging files through a spool directory.** Writes are refused with `EPERM` in `/private/tmp`, `/private/var/tmp` and `/Library/Printers` alike: CUPS gives filters a private profile stricter than the documented system one.
-- **Disabling the sandbox with `Sandboxing Off` in `cups-files.conf`.** macOS ignores the directive entirely.
+Two details make this work, and both cost a while to find:
 
-Backends are not subject to those limits by design — the `ipp` backend must reach the network and the `usb` backend must open a device. That is why the conversion lives in a backend.
+* The Panasonic backend carries **its own copy of `sanei_usb`** (from
+  sane-backends 1.0.19) that goes through libusb-0.1. Loaded as a module by
+  SANE’s `dll` backend, its `sanei_usb_*` calls get resolved against the system
+  `libsane.so.1` instead, which uses libusb-1.0 and `/dev/bus/usb` — neither of
+  which exists in the container. So the backend is substituted **for
+  `libsane.so.1` itself**; that is legitimate, since its `SONAME` is exactly
+  `libsane.so.1`.
+* Its libusb headers define `LIBUSB_PATH_MAX` as **4097**, not 512 as in
+  libusb-0.1.12. Get that wrong and the backend reads the device list past the
+  end of the shim’s structures and silently finds nothing.
+
+The bridge holds the device only for the duration of one operation and closes it
+right after, so it does not block printing.
+
+### Why a backend and not a filter
+
+Two earlier designs failed, which is worth knowing before “simplifying” this:
+
+1. **A filter talking over the network.** macOS runs print filters in a sandbox
+   that permits exactly one outbound connection — the `cupsd` socket
+   (`/System/Library/Sandbox/Profiles/com.apple.printtool.daemon.sb`).
+2. **A filter exchanging files.** Writes are refused with `EPERM` in
+   `/private/tmp`, `/private/var/tmp` and `/Library/Printers` alike: CUPS builds
+   filters a private profile that is stricter than the system one.
+3. **`Sandboxing Off`** in `cups-files.conf` is ignored by macOS.
+
+Backends are not subject to those limits by design — `ipp` must reach the
+network, `usb` must open a device. So the conversion lives in a backend.
 
 ---
 
-## 3. Requirements
+## Installation
 
-- macOS 15 or newer, Apple Silicon or Intel.
-- [Homebrew](https://brew.sh).
-- `colima` and `docker`, which provide the Linux container.
-- An internet connection for the first launch only.
-- The printer connected by USB and switched on.
+Short version below; for a step-by-step walkthrough with troubleshooting, see
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
-Install the container tooling first:
+### Requirements
+
+* macOS 15 or newer, Apple Silicon or Intel;
+* [Homebrew](https://brew.sh);
+* colima and docker:
 
 ```bash
 brew install colima docker
 ```
 
----
+### From the prebuilt package
 
-## 4. Installation
+Download `Panasonic MFP <version>.pkg` from Releases and run it. The package is
+not signed, so the first time right-click it and choose **Open**, or allow it
+under *System Settings → Privacy & Security*.
 
-1. Download **`Panasonic MFP 1.0.pkg`** from this repository.
-2. **Right-click the file and choose Open** — the package is not signed by an Apple Developer ID, so a plain double-click is refused. Alternatively allow it under *System Settings → Privacy & Security*.
-3. Follow the installer. It will ask for your administrator password: the CUPS backend has to be installed as root, which is how every print backend works.
-4. Launch **Panasonic MFP** from the Applications folder.
-5. Wait for the first-run setup to finish. The application downloads the Panasonic Linux driver from the vendor's support site, verifies its SHA-256 checksum and builds the container. This takes a few minutes and happens **only once**.
-6. Print a test page from any application to confirm.
+The installer creates the print queue and enables a small background helper. On
+the app’s first launch the Panasonic driver is downloaded from the vendor’s
+official support site and the container is built — this needs internet access
+and takes a few minutes.
 
-### What the installer does
+### From source
 
-- Copies the application to the Applications folder.
-- Installs the CUPS backend and the helper scripts.
-- Creates the print queue named **Panasonic KX-MB1500**.
-- Enables a small background agent that keeps the conversion service alive, so printing works even when the application is closed.
-
----
-
-## 5. Using the printer
-
-Print normally. The queue appears in every print dialog, and the standard options — paper size, resolution, paper type, toner saving — are described by the printer definition shipped with this project.
-
-The first job after a period of inactivity may take longer: the virtual machine has to start. Subsequent jobs take a few seconds.
+```bash
+git clone https://github.com/<your-account>/PanasonicMFP.git
+cd PanasonicMFP
+./packaging/build-installer.sh
+open build/*.pkg
+```
 
 ---
 
-## 6. The application
+## Usage
 
-Printing does not require the application. It exists for three other purposes:
+Just print. “Panasonic KX-MB1500” is available in every application’s print
+dialog, and the app does **not** need to be running: a background helper keeps
+the conversion service alive.
 
-- **A built-in print panel** — drag PDFs or images straight onto the window, set copies, single- or double-sided, page ranges, fit-to-page, landscape and quality, and watch the job queue.
-- **Hardware diagnostics** — what USB, CUPS and ImageCapture actually see, and the exact state of the stock Panasonic drivers. The report can be copied to the clipboard.
-- **Service control** — the status is shown in the menu bar, with start, stop and restart.
+The “Panasonic MFP” app is there for the rest:
 
-The interface follows the system language; English and Russian are included.
+* **scanning** — see [Scanning](#scanning); this is the only place it works;
+* hardware diagnostics — what USB, CUPS and ImageCapture actually see, and the
+  state of the stock Panasonic drivers;
+* controlling the conversion service, with its status in the menu bar;
 
-<img width="451" height="243" alt="Panasonic MFP application" src="https://github.com/user-attachments/assets/f8171f73-72be-41c9-a748-ec67f97b0aa0" />
+The interface follows your system language: English and Russian are included.
 
----
-
-## 7. Managing the service by hand
+### Managing the service by hand
 
 ```bash
 /Library/Printers/PanasonicMFP/panasonic-mfp-service status
 /Library/Printers/PanasonicMFP/panasonic-mfp-service start
-/Library/Printers/PanasonicMFP/panasonic-mfp-service restart
 /Library/Printers/PanasonicMFP/panasonic-mfp-service logs
 ```
 
 ---
 
-## 8. Scanning
+## Scanning
 
-**Scanning is deliberately not part of this project.**
+Scanning happens **inside the “Panasonic MFP” app**, on the Scanning tab. The
+scanner will *not* appear in Image Capture, Preview or any other macOS program:
+Panasonic’s ICA module cannot load — it depends on a Carbon API Apple removed —
+and this project deliberately bypasses ImageCapture entirely rather than trying
+to repair it.
 
-macOS detects the scanner, but opening a session returns *"Failed to open a connection to the device"*. The cause is the same Carbon dependency described in [section 1](#why-the-vendor-drivers-fail): Panasonic's ICA module cannot be loaded at all. The **Device** tab still reports whether macOS sees the scanner, which helps when diagnosing the hardware.
+What the app does:
 
-The approach that rescued printing does not transfer directly. A Linux scanner driver exists, but scanning needs real USB access, and a container on macOS has none. A plausible route is a shim that tunnels the container's `libusb` calls to a macOS helper driving the device through IOKit. That is a separate project and it is not solved here.
+* flatbed scanning at 75–1200 dpi, line art / grayscale / color;
+* pages accumulate into one document — scan, put the next sheet, scan again;
+* export to PDF, searchable PDF (OCR via Vision, Russian and English),
+  multi-page TIFF, or JPEG/PNG per page;
+* a destination folder you pick once; saving afterwards takes no dialog.
 
----
+The KX-MB1500 has no document feeder, so “batch scanning” means pressing
+**Scan page** once per sheet. They are merged when you save.
 
-## 9. Troubleshooting
+On the first scan the app downloads Panasonic’s Linux scanner driver
+(`panamfs-scan-1.3.1-x86_64`, ~1.2 MB), verifies its SHA-256 and builds the
+container — a few minutes, once.
 
-| Symptom | What to do |
-| --- | --- |
-| Jobs sit in the queue and nothing prints | Check the menu bar icon. If the service is stopped, start it there or run `panasonic-mfp-service start`. |
-| *"Service is not running"* in the job status | `colima` is probably not up. Run `colima start`, then `panasonic-mfp-service start`. |
-| The printer is missing from the **Device** tab | The device drops off the USB bus in deep power saving. Wake it with any button and press **Refresh**. |
-| First launch fails to download the driver | Check the internet connection and run `panasonic-mfp-service fetch-driver` to retry. |
-| The package will not open | It is unsigned. Right-click it and choose **Open**, or allow it in *System Settings → Privacy & Security*. |
+To check the whole path against real hardware without the interface:
 
----
+```bash
+/Applications/Panasonic\ MFP.app/Contents/MacOS/PanasonicMFP --scan-test 2
+```
 
-## 10. What gets installed where
+It scans two pages, merges them into a PDF and prints where it landed.
+
+## What gets installed where
 
 | Path | Purpose |
-| --- | --- |
+|---|---|
 | `/Applications/Panasonic MFP.app` | The application |
 | `/usr/libexec/cups/backend/panasonic` | CUPS backend, runs as root |
-| `/Library/Printers/PanasonicMFP/` | Helper scripts, printer definition, container definition |
-| `~/Library/Application Support/PanasonicMFP/` | Downloaded driver and service token |
-| `~/Library/LaunchAgents/` | Background agent that keeps the service alive |
+| `/Library/Printers/PanasonicMFP/` | Helper scripts, PPD, container definitions, `usbbridge` |
+| `~/Library/Application Support/PanasonicMFP/` | Downloaded drivers, service token, scanner exchange folder |
+| `~/Library/LaunchAgents/com.vt.panasonic-mfp.supervisor.plist` | Keeps the service alive |
 
-### Uninstalling
+### Uninstall
 
 ```bash
 lpadmin -x Panasonic_KX_MB1500
 launchctl bootout gui/$UID/com.vt.panasonic-mfp.supervisor
 rm -f ~/Library/LaunchAgents/com.vt.panasonic-mfp.supervisor.plist
 /Library/Printers/PanasonicMFP/panasonic-mfp-service stop
-sudo rm -rf /Library/Printers/PanasonicMFP
-sudo rm -f /usr/libexec/cups/backend/panasonic
+sudo rm -rf /Library/Printers/PanasonicMFP /usr/libexec/cups/backend/panasonic
 sudo rm -rf "/Applications/Panasonic MFP.app"
 rm -rf ~/Library/Application\ Support/PanasonicMFP
-docker rmi panasonic-mfp-converter
+docker rmi panasonic-mfp-converter panasonic-mfp-scanner
 ```
 
 ---
 
-## 11. Security notes
+## Known limitations
 
-It is worth knowing exactly what runs with elevated privileges:
+All of these were established by measurement on real hardware, not guessed at.
 
-- The backend runs as **root** for every print job. That is how all CUPS backends work. It talks only to `127.0.0.1`, handles temporary files and hands the result to Apple's `usb` backend.
-- The conversion service listens on `127.0.0.1` only and requires a token stored in the user's home directory with mode `0600`.
-- Panasonic's closed-source driver runs inside the container, with **no access to your files and no access to USB**.
+**Several files sent as one job print only the first document.** Select three
+files in Finder, hit Print, and one sheet comes out. CUPS starts a backend
+*once per job*, not once per document, and expects it to stay alive and accept
+the rest; ours exits after the first, so CUPS waits on a dead process. Print
+files one at a time, or add them in the application — it submits each file as
+its own job and waits for the previous one to leave the queue.
+
+**"Done" means the data reached the printer, not that the sheet came out.** The
+printer interface is unidirectional: the device never reports back. The
+application marks a file finished when its job leaves the CUPS queue, which
+happens once the bytes are delivered. Expect the tray to lag behind the
+interface by a few seconds.
+
+**Print density has exactly two controls.** `TonerSave` and `Resolution` change
+the byte stream; `MediaType` does not — `Plain`, `ThickPaper` and `ThinPaper`
+produce byte-identical output. The PPD declares no `print-quality`, so CUPS
+silently drops that option and logs `Bad resolution`. If output is pale with
+both controls at maximum, the cause is the toner-save setting in the device's
+own menu, the cartridge, or the drum — there is nothing left to turn in
+software.
+
+**The device drops off the USB bus when it sleeps.** Presence is checked
+through IOKit; the first job after a long idle may need the device woken up.
+
+**Scanning works only inside the application.** The vendor's ICA module does
+not load on current macOS, so the scanner never appears in Image Capture,
+Preview, or anything else that uses ImageCapture.
 
 ---
 
-## 12. Licensing
+## Security notes
 
-The code of this project is released under the [MIT license](LICENSE).
+It is worth knowing what runs with elevated privileges:
 
-The Panasonic driver is **neither included nor redistributed**. It is the vendor's proprietary software: the installer downloads it from Panasonic's official support site on first launch and verifies its SHA-256 checksum. The printer definition file was written from scratch against the PPD specification and contains no vendor files.
+* **the backend runs as root** for every job — that is how all CUPS backends
+  work. It only talks to `127.0.0.1`, handles temporary files and hands the
+  result to Apple’s `usb` backend;
+* **the service listens on `127.0.0.1` only** and requires a token stored in the
+  user’s home directory with mode `0600`;
+* **Panasonic’s closed-source drivers run inside containers**, with no access to
+  your files and no direct access to USB;
+* **the USB bridge runs as your user, not root**, listens on `127.0.0.1:9632`
+  only, and is started for a single scan and stopped right after. It exposes one
+  device — the Panasonic scanner interface — and nothing else on the bus.
 
-*This project is not affiliated with or endorsed by Panasonic Corporation.*
+---
+
+## Licensing and legal
+
+The code in this repository is your own work; pick a license before publishing
+(MIT is a reasonable default).
+
+**The Panasonic driver is neither included nor redistributed here.** It is the
+vendor’s proprietary software: the package downloads it from Panasonic’s
+official support site on first launch and verifies its SHA-256 checksum. The
+printer description (`macos/PanasonicKXMB1500.ppd`) was written from scratch
+against the PPD specification and contains no vendor files.
+
+This project is not affiliated with or endorsed by Panasonic Corporation.
+
